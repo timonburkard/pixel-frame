@@ -1,0 +1,14 @@
+# This file was automatically generated.
+
+[target.thumbv8m.main-none-eabihf]
+runner = 'probe-rs run --chip STM32U575ZI --probe 0483:374e:003E002A3235510A37333439'
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[env]
+DEFMT_LOG = "trace"
+
+[unstable]
+build-std = ["core"]
+build-std-features = ["panic_immediate_abort"]

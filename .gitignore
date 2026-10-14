@@ -1,0 +1,7 @@
+# General
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Firmware
+firmware/target/
