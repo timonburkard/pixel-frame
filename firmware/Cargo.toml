@@ -24,9 +24,9 @@ test = false
 bench = false
 
 [profile.dev]
-debug = true
-lto = true
-opt-level = "z"
+debug = 2
+lto = false
+opt-level = 2
 incremental = true
 
 [profile.release]

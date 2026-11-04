@@ -1,4 +1,4 @@
 # This file was automatically generated.
 
 [default.general]
-chip = "STM32U575ZITx"
+chip = "STM32U575ZI"

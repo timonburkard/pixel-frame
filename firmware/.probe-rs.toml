@@ -1,0 +1,2 @@
+[presets.default]
+chip = "STM32U575ZI"
