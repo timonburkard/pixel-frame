@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-mod fmt;
 mod test_image;
 
 #[cfg(not(feature = "defmt"))]
