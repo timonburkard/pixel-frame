@@ -98,13 +98,13 @@ impl Hub75 {
                 let upper = panel.get_pixel(x, y);
                 let lower = panel.get_pixel(x, y + HEIGHT / 2);
 
-                self.r1.set_level(if upper.r > 0 { Level::High } else { Level::Low });
-                self.g1.set_level(if upper.g > 0 { Level::High } else { Level::Low });
-                self.b1.set_level(if upper.b > 0 { Level::High } else { Level::Low });
+                self.r1.set_level(if upper.r > 127 { Level::High } else { Level::Low });
+                self.g1.set_level(if upper.g > 127 { Level::High } else { Level::Low });
+                self.b1.set_level(if upper.b > 127 { Level::High } else { Level::Low });
 
-                self.r2.set_level(if lower.r > 0 { Level::High } else { Level::Low });
-                self.g2.set_level(if lower.g > 0 { Level::High } else { Level::Low });
-                self.b2.set_level(if lower.b > 0 { Level::High } else { Level::Low });
+                self.r2.set_level(if lower.r > 127 { Level::High } else { Level::Low });
+                self.g2.set_level(if lower.g > 127 { Level::High } else { Level::Low });
+                self.b2.set_level(if lower.b > 127 { Level::High } else { Level::Low });
 
                 self.clk.set_high();
                 self.clk.set_low();
