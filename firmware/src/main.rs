@@ -25,11 +25,11 @@ pub struct Rgb {
     b: u8,
 }
 
-pub struct Frame {
+pub struct Panel {
     pixels: [[Rgb; WIDTH]; HEIGHT],
 }
 
-impl Frame {
+impl Panel {
     pub const fn new() -> Self {
         Self {
             pixels: [[Rgb { r: 0, g: 0, b: 0 }; WIDTH]; HEIGHT],
@@ -92,7 +92,7 @@ impl Hub75 {
         }
     }
 
-    pub async fn refresh(&mut self, frame: &Frame) {
+    pub async fn refresh(&mut self, panel: &Panel) {
         // Each address selects a row in both the upper and lower halves.
         for y in 0..HEIGHT / 2 {
             // 1. Disable OE
@@ -100,8 +100,8 @@ impl Hub75 {
 
             // 2. Shift pixels for both halves of the panel
             for x in 0..WIDTH {
-                let upper = frame.get_pixel(x, y);
-                let lower = frame.get_pixel(x, y + HEIGHT / 2);
+                let upper = panel.get_pixel(x, y);
+                let lower = panel.get_pixel(x, y + HEIGHT / 2);
 
                 self.r1.set_level(if upper.r > 0 { Level::High } else { Level::Low });
                 self.g1.set_level(if upper.g > 0 { Level::High } else { Level::Low });
@@ -159,10 +159,10 @@ async fn main(_spawner: Spawner) {
 
     let mut hub75 = Hub75::new(peripherals);
 
-    let mut frame = Frame::new();
-    test_image::load(&mut frame);
+    let mut panel = Panel::new();
+    test_image::load(&mut panel);
 
     loop {
-        hub75.refresh(&frame).await;
+        hub75.refresh(&panel).await;
     }
 }
