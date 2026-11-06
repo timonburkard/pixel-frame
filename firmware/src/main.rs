@@ -135,8 +135,7 @@ impl Hub75 {
     }
 }
 
-#[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+fn init_stm32() -> embassy_stm32::Peripherals {
     // 160 MHz
     let mut config = embassy_stm32::Config::default();
     config.rcc.msis = Some(MSIRange::RANGE_48MHZ);
@@ -151,9 +150,14 @@ async fn main(_spawner: Spawner) {
     config.rcc.sys = Sysclk::PLL1_R;
     config.rcc.voltage_range = VoltageScale::RANGE1;
 
-    let p: embassy_stm32::Peripherals = embassy_stm32::init(config);
+    embassy_stm32::init(config)
+}
 
-    let mut hub75 = Hub75::new(p);
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let peripherals = init_stm32();
+
+    let mut hub75 = Hub75::new(peripherals);
 
     let mut frame = Frame::new();
     test_image::load(&mut frame);
