@@ -17,6 +17,7 @@ use embassy_stm32::rcc::{MSIRange, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sy
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
 const RGB_DATA_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 7) | (1 << 8) | (1 << 9);
+const INTENSITY_PHASES: u8 = 4; // Number of phases for intensity control
 
 #[derive(Clone, Copy, Default)]
 pub struct Rgb {
@@ -66,6 +67,7 @@ pub struct Hub75 {
     addr_e: Output<'static>,
     clk: Output<'static>,
     lat: Output<'static>,
+    intensity_phase: u8,
 }
 
 impl Hub75 {
@@ -89,10 +91,16 @@ impl Hub75 {
 
             clk: Output::new(p.PE15, Level::Low, Speed::VeryHigh),
             lat: Output::new(p.PE5, Level::Low, Speed::VeryHigh),
+
+            intensity_phase: 0, // 0 ... INTENSITY_PHASES - 1
         }
     }
 
     pub async fn refresh(&mut self, panel: &Panel) {
+        self.intensity_phase = (self.intensity_phase + 1) % (INTENSITY_PHASES);
+
+        let intensity_threshold = ((self.intensity_phase as u16 + 1) * 255 / (INTENSITY_PHASES as u16 + 1)) as u8;
+
         // Each address selects a row in both the upper and lower halves.
         for y in 0..HEIGHT / 2 {
             // 1. Shift pixels for both halves of the panel
@@ -102,12 +110,12 @@ impl Hub75 {
             for x in 0..WIDTH {
                 let upper = upper_row[x];
                 let lower = lower_row[x];
-                let set_mask = ((upper.r as u32 >> 7) << 7)
-                    | ((upper.g as u32 >> 7) << 8)
-                    | ((upper.b as u32 >> 7) << 9)
-                    | ((lower.r as u32 >> 7) << 2)
-                    | ((lower.g as u32 >> 7) << 3)
-                    | ((lower.b as u32 >> 7) << 4);
+                let set_mask = (((upper.r > intensity_threshold) as u32) << 7)
+                    | (((upper.g > intensity_threshold) as u32) << 8)
+                    | (((upper.b > intensity_threshold) as u32) << 9)
+                    | (((lower.r > intensity_threshold) as u32) << 2)
+                    | (((lower.g > intensity_threshold) as u32) << 3)
+                    | (((lower.b > intensity_threshold) as u32) << 4);
                 let reset_mask = RGB_DATA_MASK & !set_mask;
                 pac::GPIOE.bsrr().write_value(Bsrr(set_mask | (reset_mask << 16)));
 
