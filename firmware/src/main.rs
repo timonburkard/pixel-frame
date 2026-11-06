@@ -12,11 +12,9 @@ use {defmt_rtt as _, panic_probe as _};
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::rcc::{MSIRange, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk, VoltageScale};
-use embassy_time::Timer;
 
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
-const ROW_DWELL_MICROS: u64 = 150;
 
 #[derive(Clone, Copy, Default)]
 pub struct Rgb {
@@ -128,9 +126,6 @@ impl Hub75 {
 
             // 5. Enable OE
             self.oe.set_level(Level::Low);
-
-            // 6. Keep the row lit for the configured dwell interval
-            Timer::after_micros(ROW_DWELL_MICROS).await;
         }
     }
 }
