@@ -17,6 +17,7 @@ use embassy_stm32::rcc::{MSIRange, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sy
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
 const RGB_DATA_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 7) | (1 << 8) | (1 << 9);
+const CLK_MASK: u32 = 1 << 15;
 const INTENSITY_PHASES: u8 = 4; // Number of phases for intensity control
 
 #[derive(Clone, Copy, Default)]
@@ -116,12 +117,13 @@ impl Hub75 {
                     | (((lower.r > intensity_threshold) as u32) << 2)
                     | (((lower.g > intensity_threshold) as u32) << 3)
                     | (((lower.b > intensity_threshold) as u32) << 4);
-                let reset_mask = RGB_DATA_MASK & !set_mask;
+                let reset_mask = (RGB_DATA_MASK & !set_mask) | CLK_MASK;
                 pac::GPIOE.bsrr().write_value(Bsrr(set_mask | (reset_mask << 16)));
 
                 self.clk.set_high();
-                self.clk.set_low();
             }
+
+            self.clk.set_low();
 
             // 2. Disable OE
             self.oe.set_level(Level::High);
