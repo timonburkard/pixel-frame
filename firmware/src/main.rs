@@ -95,10 +95,7 @@ impl Hub75 {
     pub async fn refresh(&mut self, panel: &Panel) {
         // Each address selects a row in both the upper and lower halves.
         for y in 0..HEIGHT / 2 {
-            // 1. Disable OE
-            self.oe.set_level(Level::High);
-
-            // 2. Shift pixels for both halves of the panel
+            // 1. Shift pixels for both halves of the panel
             for x in 0..WIDTH {
                 let upper = panel.get_pixel(x, y);
                 let lower = panel.get_pixel(x, y + HEIGHT / 2);
@@ -114,6 +111,9 @@ impl Hub75 {
                 self.clk.set_high();
                 self.clk.set_low();
             }
+
+            // 2. Disable OE
+            self.oe.set_level(Level::High);
 
             // 3. Latch data
             self.lat.set_high();
