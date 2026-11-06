@@ -18,6 +18,7 @@ const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
 const RGB_DATA_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 7) | (1 << 8) | (1 << 9);
 const CLK_MASK: u32 = 1 << 15;
+const ADDR_MASK: u32 = 0b1_1111 << 10;
 const INTENSITY_PHASES: u8 = 4; // Number of phases for intensity control
 
 #[derive(Clone, Copy, Default)]
@@ -61,11 +62,11 @@ pub struct Hub75 {
     _r2: Output<'static>,
     _g2: Output<'static>,
     _b2: Output<'static>,
-    addr_a: Output<'static>,
-    addr_b: Output<'static>,
-    addr_c: Output<'static>,
-    addr_d: Output<'static>,
-    addr_e: Output<'static>,
+    _addr_a: Output<'static>,
+    _addr_b: Output<'static>,
+    _addr_c: Output<'static>,
+    _addr_d: Output<'static>,
+    _addr_e: Output<'static>,
     clk: Output<'static>,
     lat: Output<'static>,
     intensity_phase: u8,
@@ -84,11 +85,11 @@ impl Hub75 {
             _g2: Output::new(p.PE3, Level::Low, Speed::VeryHigh),
             _b2: Output::new(p.PE4, Level::Low, Speed::VeryHigh),
 
-            addr_a: Output::new(p.PE10, Level::Low, Speed::VeryHigh),
-            addr_b: Output::new(p.PE11, Level::Low, Speed::VeryHigh),
-            addr_c: Output::new(p.PE12, Level::Low, Speed::VeryHigh),
-            addr_d: Output::new(p.PE13, Level::Low, Speed::VeryHigh),
-            addr_e: Output::new(p.PE14, Level::Low, Speed::VeryHigh),
+            _addr_a: Output::new(p.PE10, Level::Low, Speed::VeryHigh),
+            _addr_b: Output::new(p.PE11, Level::Low, Speed::VeryHigh),
+            _addr_c: Output::new(p.PE12, Level::Low, Speed::VeryHigh),
+            _addr_d: Output::new(p.PE13, Level::Low, Speed::VeryHigh),
+            _addr_e: Output::new(p.PE14, Level::Low, Speed::VeryHigh),
 
             clk: Output::new(p.PE15, Level::Low, Speed::VeryHigh),
             lat: Output::new(p.PE5, Level::Low, Speed::VeryHigh),
@@ -133,11 +134,9 @@ impl Hub75 {
             self.lat.set_low();
 
             // 4. Set row address
-            self.addr_a.set_level(if (y & 0b00001) != 0 { Level::High } else { Level::Low });
-            self.addr_b.set_level(if (y & 0b00010) != 0 { Level::High } else { Level::Low });
-            self.addr_c.set_level(if (y & 0b00100) != 0 { Level::High } else { Level::Low });
-            self.addr_d.set_level(if (y & 0b01000) != 0 { Level::High } else { Level::Low });
-            self.addr_e.set_level(if (y & 0b10000) != 0 { Level::High } else { Level::Low });
+            let addr_set_mask = (y as u32) << 10;
+            let addr_reset_mask = ADDR_MASK & !addr_set_mask;
+            pac::GPIOE.bsrr().write_value(Bsrr(addr_set_mask | (addr_reset_mask << 16)));
 
             // 5. Enable OE
             self.oe.set_level(Level::Low);
