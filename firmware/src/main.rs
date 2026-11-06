@@ -11,10 +11,12 @@ use {defmt_rtt as _, panic_probe as _};
 
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::pac::{self, gpio::regs::Bsrr};
 use embassy_stm32::rcc::{MSIRange, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk, VoltageScale};
 
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
+const RGB_DATA_MASK: u32 = (1 << 2) | (1 << 3) | (1 << 4) | (1 << 7) | (1 << 8) | (1 << 9);
 
 #[derive(Clone, Copy, Default)]
 pub struct Rgb {
@@ -51,12 +53,12 @@ impl Panel {
 
 pub struct Hub75 {
     oe: Output<'static>,
-    r1: Output<'static>,
-    g1: Output<'static>,
-    b1: Output<'static>,
-    r2: Output<'static>,
-    g2: Output<'static>,
-    b2: Output<'static>,
+    _r1: Output<'static>,
+    _g1: Output<'static>,
+    _b1: Output<'static>,
+    _r2: Output<'static>,
+    _g2: Output<'static>,
+    _b2: Output<'static>,
     addr_a: Output<'static>,
     addr_b: Output<'static>,
     addr_c: Output<'static>,
@@ -71,13 +73,13 @@ impl Hub75 {
         Self {
             oe: Output::new(p.PE6, Level::High, Speed::VeryHigh),
 
-            r1: Output::new(p.PE7, Level::Low, Speed::VeryHigh),
-            g1: Output::new(p.PE8, Level::Low, Speed::VeryHigh),
-            b1: Output::new(p.PE9, Level::Low, Speed::VeryHigh),
+            _r1: Output::new(p.PE7, Level::Low, Speed::VeryHigh),
+            _g1: Output::new(p.PE8, Level::Low, Speed::VeryHigh),
+            _b1: Output::new(p.PE9, Level::Low, Speed::VeryHigh),
 
-            r2: Output::new(p.PE2, Level::Low, Speed::VeryHigh),
-            g2: Output::new(p.PE3, Level::Low, Speed::VeryHigh),
-            b2: Output::new(p.PE4, Level::Low, Speed::VeryHigh),
+            _r2: Output::new(p.PE2, Level::Low, Speed::VeryHigh),
+            _g2: Output::new(p.PE3, Level::Low, Speed::VeryHigh),
+            _b2: Output::new(p.PE4, Level::Low, Speed::VeryHigh),
 
             addr_a: Output::new(p.PE10, Level::Low, Speed::VeryHigh),
             addr_b: Output::new(p.PE11, Level::Low, Speed::VeryHigh),
@@ -94,17 +96,20 @@ impl Hub75 {
         // Each address selects a row in both the upper and lower halves.
         for y in 0..HEIGHT / 2 {
             // 1. Shift pixels for both halves of the panel
+            let upper_row = &panel.pixels[y];
+            let lower_row = &panel.pixels[y + HEIGHT / 2];
+
             for x in 0..WIDTH {
-                let upper = panel.get_pixel(x, y);
-                let lower = panel.get_pixel(x, y + HEIGHT / 2);
-
-                self.r1.set_level(if upper.r > 127 { Level::High } else { Level::Low });
-                self.g1.set_level(if upper.g > 127 { Level::High } else { Level::Low });
-                self.b1.set_level(if upper.b > 127 { Level::High } else { Level::Low });
-
-                self.r2.set_level(if lower.r > 127 { Level::High } else { Level::Low });
-                self.g2.set_level(if lower.g > 127 { Level::High } else { Level::Low });
-                self.b2.set_level(if lower.b > 127 { Level::High } else { Level::Low });
+                let upper = upper_row[x];
+                let lower = lower_row[x];
+                let set_mask = ((upper.r as u32 >> 7) << 7)
+                    | ((upper.g as u32 >> 7) << 8)
+                    | ((upper.b as u32 >> 7) << 9)
+                    | ((lower.r as u32 >> 7) << 2)
+                    | ((lower.g as u32 >> 7) << 3)
+                    | ((lower.b as u32 >> 7) << 4);
+                let reset_mask = RGB_DATA_MASK & !set_mask;
+                pac::GPIOE.bsrr().write_value(Bsrr(set_mask | (reset_mask << 16)));
 
                 self.clk.set_high();
                 self.clk.set_low();
