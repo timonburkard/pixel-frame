@@ -27,9 +27,11 @@ const DMA_REQUEST_TIM6: u8 = 4;
 const DMA_WORD_RATE: u32 = 16_000_000;
 const MAX_DMA_DESCRIPTOR_WORDS: usize = u16::MAX as usize / core::mem::size_of::<u16>();
 const DMA_DESCRIPTOR_COUNT: usize = SCAN_WORDS.div_ceil(MAX_DMA_DESCRIPTOR_WORDS);
+const DMA_CHANNEL_COUNT: usize = 2;
 
 bind_interrupts!(struct Irqs {
     GPDMA1_CHANNEL0 => embassy_stm32::dma::InterruptHandler<peripherals::GPDMA1_CH0>;
+    GPDMA1_CHANNEL1 => embassy_stm32::dma::InterruptHandler<peripherals::GPDMA1_CH1>;
 });
 
 #[repr(C, align(4))]
@@ -54,8 +56,10 @@ impl DmaLinkedListItem {
     };
 }
 
-static mut SCAN_MEMORY: [u16; SCAN_WORDS] = [0; SCAN_WORDS];
-static mut DMA_LINKED_LIST: [DmaLinkedListItem; DMA_DESCRIPTOR_COUNT] = [DmaLinkedListItem::ZERO; DMA_DESCRIPTOR_COUNT];
+static mut SCAN_MEMORY_TOP: [u16; SCAN_WORDS] = [0; SCAN_WORDS];
+static mut SCAN_MEMORY_BOTTOM: [u16; SCAN_WORDS] = [0; SCAN_WORDS];
+static mut DMA_LINKED_LISTS: [[DmaLinkedListItem; DMA_DESCRIPTOR_COUNT]; DMA_CHANNEL_COUNT] =
+    [[DmaLinkedListItem::ZERO; DMA_DESCRIPTOR_COUNT]; DMA_CHANNEL_COUNT];
 
 #[derive(Clone, Copy, Default)]
 pub struct Rgb {
@@ -66,6 +70,25 @@ pub struct Rgb {
 
 pub struct Panel {
     pixels: [[Rgb; WIDTH]; HEIGHT],
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum GpioPort {
+    D = 3,
+    E = 4,
+}
+
+fn gpio_output(port: GpioPort, pin: u8, level: Level) -> Output<'static> {
+    let pin = unsafe { embassy_stm32::gpio::AnyPin::steal(port as u8 * 16 + pin) };
+    Output::new(pin, level, Speed::VeryHigh)
+}
+
+fn gpio_output_register(port: GpioPort) -> *mut u16 {
+    match port {
+        GpioPort::D => pac::GPIOD.odr().as_ptr() as *mut u16,
+        GpioPort::E => pac::GPIOE.odr().as_ptr() as *mut u16,
+    }
 }
 
 impl Panel {
@@ -91,8 +114,9 @@ impl Panel {
 }
 
 pub struct Hub75 {
-    _timer: Timer<'static, peripherals::TIM6>,
     _dma_channel: embassy_stm32::dma::Channel<'static>,
+    dma_channel_index: usize,
+    gpio_odr: *mut u16,
     _oe: Output<'static>,
     _r1: Output<'static>,
     _g1: Output<'static>,
@@ -110,28 +134,25 @@ pub struct Hub75 {
 }
 
 impl Hub75 {
-    pub fn new(p: embassy_stm32::Peripherals) -> Self {
+    pub fn new(dma_channel: embassy_stm32::dma::Channel<'static>, dma_channel_index: usize, gpio_port: GpioPort) -> Self {
         Self {
-            _timer: Timer::new(p.TIM6),
-            _dma_channel: embassy_stm32::dma::Channel::new(p.GPDMA1_CH0, Irqs),
-            _oe: Output::new(p.PE6, Level::High, Speed::VeryHigh),
-
-            _r1: Output::new(p.PE7, Level::Low, Speed::VeryHigh),
-            _g1: Output::new(p.PE8, Level::Low, Speed::VeryHigh),
-            _b1: Output::new(p.PE9, Level::Low, Speed::VeryHigh),
-
-            _r2: Output::new(p.PE2, Level::Low, Speed::VeryHigh),
-            _g2: Output::new(p.PE3, Level::Low, Speed::VeryHigh),
-            _b2: Output::new(p.PE4, Level::Low, Speed::VeryHigh),
-
-            _addr_a: Output::new(p.PE10, Level::Low, Speed::VeryHigh),
-            _addr_b: Output::new(p.PE11, Level::Low, Speed::VeryHigh),
-            _addr_c: Output::new(p.PE12, Level::Low, Speed::VeryHigh),
-            _addr_d: Output::new(p.PE13, Level::Low, Speed::VeryHigh),
-            _addr_e: Output::new(p.PE14, Level::Low, Speed::VeryHigh),
-
-            _clk: Output::new(p.PE15, Level::Low, Speed::VeryHigh),
-            _lat: Output::new(p.PE5, Level::Low, Speed::VeryHigh),
+            _dma_channel: dma_channel,
+            dma_channel_index,
+            gpio_odr: gpio_output_register(gpio_port),
+            _oe: gpio_output(gpio_port, 6, Level::High),
+            _r1: gpio_output(gpio_port, 7, Level::Low),
+            _g1: gpio_output(gpio_port, 8, Level::Low),
+            _b1: gpio_output(gpio_port, 9, Level::Low),
+            _r2: gpio_output(gpio_port, 2, Level::Low),
+            _g2: gpio_output(gpio_port, 3, Level::Low),
+            _b2: gpio_output(gpio_port, 4, Level::Low),
+            _addr_a: gpio_output(gpio_port, 10, Level::Low),
+            _addr_b: gpio_output(gpio_port, 11, Level::Low),
+            _addr_c: gpio_output(gpio_port, 12, Level::Low),
+            _addr_d: gpio_output(gpio_port, 13, Level::Low),
+            _addr_e: gpio_output(gpio_port, 14, Level::Low),
+            _clk: gpio_output(gpio_port, 15, Level::Low),
+            _lat: gpio_output(gpio_port, 5, Level::Low),
         }
     }
 
@@ -188,8 +209,9 @@ impl Hub75 {
     }
 
     pub fn start_dma(&self, memory: &'static [u16; SCAN_WORDS]) {
-        let gpioe_odr = pac::GPIOE.odr().as_ptr() as *mut u16;
-        let list = unsafe { &mut *core::ptr::addr_of_mut!(DMA_LINKED_LIST) };
+        assert!(self.dma_channel_index < DMA_CHANNEL_COUNT);
+        let lists = core::ptr::addr_of_mut!(DMA_LINKED_LISTS).cast::<[DmaLinkedListItem; DMA_DESCRIPTOR_COUNT]>();
+        let list = unsafe { &mut *lists.add(self.dma_channel_index) };
         let list_ptr = list.as_mut_ptr();
         let list_base_address = list_ptr as u32;
         assert_eq!(list_base_address & 0b11, 0);
@@ -215,7 +237,7 @@ impl Hub75 {
             item.tr2.set_reqsel(DMA_REQUEST_TIM6);
             item.br1.set_bndt((chunk_words * core::mem::size_of::<u16>()) as u16);
             item.sar = source as u32;
-            item.dar = gpioe_odr as u32;
+            item.dar = self.gpio_odr as u32;
 
             item.llr.set_ut1(true);
             item.llr.set_ut2(true);
@@ -226,7 +248,7 @@ impl Hub75 {
             item.llr.set_la((next_address as u16) >> 2);
         }
 
-        let channel = pac::GPDMA1.ch(0);
+        let channel = pac::GPDMA1.ch(self.dma_channel_index);
         channel.cr().write(|w| w.set_reset(true));
         channel.fcr().write(|w| {
             w.set_dtef(true);
@@ -256,12 +278,14 @@ impl Hub75 {
             w.set_useie(true);
         });
         channel.cr().modify(|w| w.set_en(true));
-
-        self._timer.set_frequency(Hertz(DMA_WORD_RATE), RoundTo::Slower);
-        self._timer.generate_update_event();
-        pac::TIM6.dier().modify(|w| w.set_ude(true));
-        self._timer.start();
     }
+}
+
+fn start_refresh_timer(timer: &mut Timer<'static, peripherals::TIM6>) {
+    timer.set_frequency(Hertz(DMA_WORD_RATE), RoundTo::Slower);
+    timer.generate_update_event();
+    pac::TIM6.dier().modify(|w| w.set_ude(true));
+    timer.start();
 }
 
 fn init_stm32() -> embassy_stm32::Peripherals {
@@ -286,14 +310,24 @@ fn init_stm32() -> embassy_stm32::Peripherals {
 async fn main(_spawner: Spawner) {
     let peripherals = init_stm32();
 
-    let mut hub75 = Hub75::new(peripherals);
+    let mut hub75_top = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH0, Irqs), 0, GpioPort::E);
+    let mut hub75_bottom = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH1, Irqs), 1, GpioPort::D);
 
-    let mut panel = Panel::new();
-    test_image::load(&mut panel);
+    let mut panel_top = Panel::new();
+    let mut panel_bottom = Panel::new();
 
-    let memory = unsafe { &mut *core::ptr::addr_of_mut!(SCAN_MEMORY) };
-    hub75.refresh_memory(&panel, memory);
-    hub75.start_dma(memory);
+    test_image::load(&mut panel_top, &mut panel_bottom);
+
+    let memory_top = unsafe { &mut *core::ptr::addr_of_mut!(SCAN_MEMORY_TOP) };
+    hub75_top.refresh_memory(&panel_top, memory_top);
+    hub75_top.start_dma(memory_top);
+
+    let memory_bottom = unsafe { &mut *core::ptr::addr_of_mut!(SCAN_MEMORY_BOTTOM) };
+    hub75_bottom.refresh_memory(&panel_bottom, memory_bottom);
+    hub75_bottom.start_dma(memory_bottom);
+
+    let mut refresh_timer = Timer::new(peripherals.TIM6);
+    start_refresh_timer(&mut refresh_timer);
 
     loop {
         cortex_m::asm::wfi();
