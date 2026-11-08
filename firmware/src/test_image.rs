@@ -1,6 +1,6 @@
 use super::{HEIGHT, Panel, Rgb, WIDTH};
 
-const TEST_IMAGE: &[u8; WIDTH * HEIGHT * 3 * 2] = include_bytes!("../assets/kingfisher_128x128.rgb");
+const TEST_IMAGE: &[u8; WIDTH * HEIGHT * 3 * 2] = include_bytes!("../assets/kingfisher_darker_128x128.rgb");
 
 pub fn load(panel_top: &mut Panel, panel_bottom: &mut Panel) {
     for y in 0..HEIGHT {
