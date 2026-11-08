@@ -16,3 +16,6 @@ Those ICs are on each 128x64 px panel:
 - STM32U575ZI reference manual: [link](https://www.st.com/resource/en/reference_manual/rm0456-stm32u5-series-armbased-32bit-mcus-stmicroelectronics.pdf)
 - NUCLEO-U575ZI-Q databrief: [link](https://www.st.com/resource/en/data_brief/nucleo-u575zi-q.pdf)
 - NUCLEO-U575ZI-Q user manual: [link](https://www.st.com/resource/en/user_manual/um2861-stm32u5-nucleo144-board-mb1549-stmicroelectronics.pdf)
+- X-NUCLEO-67W61M1 databrief: [link](https://www.st.com/resource/en/data_brief/x-nucleo-67w61m1.pdf)
+- X-NUCLEO-67W61M1 user manual: [link](https://www.st.com/resource/en/user_manual/um3449-wifibluetooth-connectivity-expansion-board-based-on-the-st67w611m1-module-for-stm32-nucleo-boards-stmicroelectronics.pdf)
+- X-CUBE-ST67W61 repo: [link](https://github.com/STMicroelectronics/x-cube-st67w61)
