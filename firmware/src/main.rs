@@ -17,16 +17,42 @@ use embassy_stm32::{bind_interrupts, pac, peripherals};
 
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
-const CLK_MASK: u16 = 1 << 15;
-const OE_MASK: u16 = 1 << 6;
-const LAT_MASK: u16 = 1 << 5;
-const INTENSITY_PHASES: u8 = 16; // Number of phases for intensity control
-const WORDS_PER_ROW: usize = WIDTH * 2 + 5;
-const SCAN_WORDS: usize = HEIGHT / 2 * WORDS_PER_ROW * INTENSITY_PHASES as usize;
+
+const PIN_ADDR_A: u8 = 0;
+const PIN_ADDR_B: u8 = 1;
+const PIN_ADDR_C: u8 = 2;
+const PIN_ADDR_D: u8 = 3;
+const PIN_ADDR_E: u8 = 4;
+const PIN_R1: u8 = 5;
+const PIN_G1: u8 = 6;
+const PIN_B1: u8 = 7;
+const PIN_R2: u8 = 8;
+const PIN_G2: u8 = 9;
+const PIN_B2: u8 = 10;
+const PIN_CLK: u8 = 12;
+const PIN_LAT: u8 = 13;
+const PIN_OE: u8 = 14;
+
+const R1_MASK: u16 = 1 << PIN_R1;
+const G1_MASK: u16 = 1 << PIN_G1;
+const B1_MASK: u16 = 1 << PIN_B1;
+const R2_MASK: u16 = 1 << PIN_R2;
+const G2_MASK: u16 = 1 << PIN_G2;
+const B2_MASK: u16 = 1 << PIN_B2;
+const CLK_MASK: u16 = 1 << PIN_CLK;
+const LAT_MASK: u16 = 1 << PIN_LAT;
+const OE_MASK: u16 = 1 << PIN_OE;
+
+const GPIO_PINS_PER_PORT: u8 = 16;
+
+const INTENSITY_PHASES: u8 = 16; // Number of phases for color intensity control
+
+const DMA_WORDS_PER_ROW: usize = WIDTH * 2 + 5;
+const DMA_SCAN_WORDS: usize = HEIGHT / 2 * DMA_WORDS_PER_ROW * INTENSITY_PHASES as usize;
 const DMA_REQUEST_TIM6: u8 = 4;
 const DMA_WORD_RATE: u32 = 16_000_000;
-const MAX_DMA_DESCRIPTOR_WORDS: usize = u16::MAX as usize / core::mem::size_of::<u16>();
-const DMA_DESCRIPTOR_COUNT: usize = SCAN_WORDS.div_ceil(MAX_DMA_DESCRIPTOR_WORDS);
+const DMA_MAX_DESCRIPTOR_WORDS: usize = u16::MAX as usize / core::mem::size_of::<u16>();
+const DMA_DESCRIPTOR_COUNT: usize = DMA_SCAN_WORDS.div_ceil(DMA_MAX_DESCRIPTOR_WORDS);
 const DMA_CHANNEL_COUNT: usize = 2;
 
 bind_interrupts!(struct Irqs {
@@ -56,8 +82,8 @@ impl DmaLinkedListItem {
     };
 }
 
-static mut SCAN_MEMORY_TOP: [u16; SCAN_WORDS] = [0; SCAN_WORDS];
-static mut SCAN_MEMORY_BOTTOM: [u16; SCAN_WORDS] = [0; SCAN_WORDS];
+static mut SCAN_MEMORY_TOP: [u16; DMA_SCAN_WORDS] = [0; DMA_SCAN_WORDS];
+static mut SCAN_MEMORY_BOTTOM: [u16; DMA_SCAN_WORDS] = [0; DMA_SCAN_WORDS];
 static mut DMA_LINKED_LISTS: [[DmaLinkedListItem; DMA_DESCRIPTOR_COUNT]; DMA_CHANNEL_COUNT] =
     [[DmaLinkedListItem::ZERO; DMA_DESCRIPTOR_COUNT]; DMA_CHANNEL_COUNT];
 
@@ -75,19 +101,19 @@ pub struct Panel {
 #[repr(u8)]
 #[derive(Clone, Copy)]
 pub enum GpioPort {
-    D = 3,
-    E = 4,
+    F = 5,
+    G = 6,
 }
 
 fn gpio_output(port: GpioPort, pin: u8, level: Level) -> Output<'static> {
-    let pin = unsafe { embassy_stm32::gpio::AnyPin::steal(port as u8 * 16 + pin) };
+    let pin = unsafe { embassy_stm32::gpio::AnyPin::steal(port as u8 * GPIO_PINS_PER_PORT + pin) };
     Output::new(pin, level, Speed::VeryHigh)
 }
 
 fn gpio_output_register(port: GpioPort) -> *mut u16 {
     match port {
-        GpioPort::D => pac::GPIOD.odr().as_ptr() as *mut u16,
-        GpioPort::E => pac::GPIOE.odr().as_ptr() as *mut u16,
+        GpioPort::F => pac::GPIOF.odr().as_ptr() as *mut u16,
+        GpioPort::G => pac::GPIOG.odr().as_ptr() as *mut u16,
     }
 }
 
@@ -117,20 +143,20 @@ pub struct Hub75 {
     _dma_channel: embassy_stm32::dma::Channel<'static>,
     dma_channel_index: usize,
     gpio_odr: *mut u16,
-    _oe: Output<'static>,
+    _addr_a: Output<'static>,
+    _addr_b: Output<'static>,
+    _addr_c: Output<'static>,
+    _addr_d: Output<'static>,
+    _addr_e: Output<'static>,
     _r1: Output<'static>,
     _g1: Output<'static>,
     _b1: Output<'static>,
     _r2: Output<'static>,
     _g2: Output<'static>,
     _b2: Output<'static>,
-    _addr_a: Output<'static>,
-    _addr_b: Output<'static>,
-    _addr_c: Output<'static>,
-    _addr_d: Output<'static>,
-    _addr_e: Output<'static>,
     _clk: Output<'static>,
     _lat: Output<'static>,
+    _oe: Output<'static>,
 }
 
 impl Hub75 {
@@ -139,24 +165,24 @@ impl Hub75 {
             _dma_channel: dma_channel,
             dma_channel_index,
             gpio_odr: gpio_output_register(gpio_port),
-            _oe: gpio_output(gpio_port, 6, Level::High),
-            _r1: gpio_output(gpio_port, 7, Level::Low),
-            _g1: gpio_output(gpio_port, 8, Level::Low),
-            _b1: gpio_output(gpio_port, 9, Level::Low),
-            _r2: gpio_output(gpio_port, 2, Level::Low),
-            _g2: gpio_output(gpio_port, 3, Level::Low),
-            _b2: gpio_output(gpio_port, 4, Level::Low),
-            _addr_a: gpio_output(gpio_port, 10, Level::Low),
-            _addr_b: gpio_output(gpio_port, 11, Level::Low),
-            _addr_c: gpio_output(gpio_port, 12, Level::Low),
-            _addr_d: gpio_output(gpio_port, 13, Level::Low),
-            _addr_e: gpio_output(gpio_port, 14, Level::Low),
-            _clk: gpio_output(gpio_port, 15, Level::Low),
-            _lat: gpio_output(gpio_port, 5, Level::Low),
+            _addr_a: gpio_output(gpio_port, PIN_ADDR_A, Level::Low),
+            _addr_b: gpio_output(gpio_port, PIN_ADDR_B, Level::Low),
+            _addr_c: gpio_output(gpio_port, PIN_ADDR_C, Level::Low),
+            _addr_d: gpio_output(gpio_port, PIN_ADDR_D, Level::Low),
+            _addr_e: gpio_output(gpio_port, PIN_ADDR_E, Level::Low),
+            _r1: gpio_output(gpio_port, PIN_R1, Level::Low),
+            _g1: gpio_output(gpio_port, PIN_G1, Level::Low),
+            _b1: gpio_output(gpio_port, PIN_B1, Level::Low),
+            _r2: gpio_output(gpio_port, PIN_R2, Level::Low),
+            _g2: gpio_output(gpio_port, PIN_G2, Level::Low),
+            _b2: gpio_output(gpio_port, PIN_B2, Level::Low),
+            _clk: gpio_output(gpio_port, PIN_CLK, Level::Low),
+            _lat: gpio_output(gpio_port, PIN_LAT, Level::Low),
+            _oe: gpio_output(gpio_port, PIN_OE, Level::High),
         }
     }
 
-    pub fn refresh_memory(&mut self, panel: &Panel, memory: &mut [u16; SCAN_WORDS]) {
+    pub fn refresh_memory(&mut self, panel: &Panel, memory: &mut [u16; DMA_SCAN_WORDS]) {
         let mut index: usize = 0;
         let mut addr_oe_state = OE_MASK; // Start with OE disabled
 
@@ -172,12 +198,12 @@ impl Hub75 {
                 for x in 0..WIDTH {
                     let upper = upper_row[x];
                     let lower = lower_row[x];
-                    let set_mask = (((upper.r > intensity_threshold) as u16) << 7)
-                        | (((upper.g > intensity_threshold) as u16) << 8)
-                        | (((upper.b > intensity_threshold) as u16) << 9)
-                        | (((lower.r > intensity_threshold) as u16) << 2)
-                        | (((lower.g > intensity_threshold) as u16) << 3)
-                        | (((lower.b > intensity_threshold) as u16) << 4);
+                    let set_mask = if upper.r > intensity_threshold { R1_MASK } else { 0 }
+                        | if upper.g > intensity_threshold { G1_MASK } else { 0 }
+                        | if upper.b > intensity_threshold { B1_MASK } else { 0 }
+                        | if lower.r > intensity_threshold { R2_MASK } else { 0 }
+                        | if lower.g > intensity_threshold { G2_MASK } else { 0 }
+                        | if lower.b > intensity_threshold { B2_MASK } else { 0 };
 
                     memory[index] = addr_oe_state | set_mask;
                     memory[index + 1] = addr_oe_state | set_mask | CLK_MASK;
@@ -194,7 +220,7 @@ impl Hub75 {
                 index += 2;
 
                 // 4. Set row address
-                addr_oe_state = ((y as u16) << 10) | OE_MASK;
+                addr_oe_state = y as u16 | OE_MASK;
                 memory[index] = addr_oe_state;
                 index += 1;
 
@@ -205,10 +231,10 @@ impl Hub75 {
             }
         }
 
-        assert_eq!(index, SCAN_WORDS);
+        assert_eq!(index, DMA_SCAN_WORDS);
     }
 
-    pub fn start_dma(&self, memory: &'static [u16; SCAN_WORDS]) {
+    pub fn start_dma(&self, memory: &'static [u16; DMA_SCAN_WORDS]) {
         assert!(self.dma_channel_index < DMA_CHANNEL_COUNT);
         let lists = core::ptr::addr_of_mut!(DMA_LINKED_LISTS).cast::<[DmaLinkedListItem; DMA_DESCRIPTOR_COUNT]>();
         let list = unsafe { &mut *lists.add(self.dma_channel_index) };
@@ -217,8 +243,8 @@ impl Hub75 {
         assert_eq!(list_base_address & 0b11, 0);
 
         for (index, item) in list.iter_mut().enumerate() {
-            let start_word = index * MAX_DMA_DESCRIPTOR_WORDS;
-            let chunk_words = (SCAN_WORDS - start_word).min(MAX_DMA_DESCRIPTOR_WORDS);
+            let start_word = index * DMA_MAX_DESCRIPTOR_WORDS;
+            let chunk_words = (DMA_SCAN_WORDS - start_word).min(DMA_MAX_DESCRIPTOR_WORDS);
             let source = unsafe { memory.as_ptr().add(start_word) };
             let next_index = (index + 1) % DMA_DESCRIPTOR_COUNT;
             let next_address = unsafe { list_ptr.add(next_index) } as u32;
@@ -310,8 +336,8 @@ fn init_stm32() -> embassy_stm32::Peripherals {
 async fn main(_spawner: Spawner) {
     let peripherals = init_stm32();
 
-    let mut hub75_top = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH0, Irqs), 0, GpioPort::E);
-    let mut hub75_bottom = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH1, Irqs), 1, GpioPort::D);
+    let mut hub75_top = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH0, Irqs), 0, GpioPort::G);
+    let mut hub75_bottom = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH1, Irqs), 1, GpioPort::F);
 
     let mut panel_top = Panel::new();
     let mut panel_bottom = Panel::new();
