@@ -1,0 +1,27 @@
+name: Firmware
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: thumbv8m.main-none-eabihf
+          components: clippy, rustfmt, rust-src
+      - name: Check formatting
+        working-directory: firmware
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        working-directory: firmware
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build firmware
+        working-directory: firmware
+        run: cargo build --release
