@@ -1,6 +1,10 @@
 #![no_std]
 #![no_main]
 
+mod remote_image;
+mod st67_http;
+pub mod st67_spi;
+#[cfg(feature = "defmt")]
 mod test_image;
 
 #[cfg(not(feature = "defmt"))]
@@ -14,6 +18,7 @@ use embassy_stm32::rcc::{MSIRange, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sy
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::{RoundTo, Timer};
 use embassy_stm32::{bind_interrupts, pac, peripherals};
+use embassy_time::{Duration, Instant, Timer as AsyncTimer};
 
 const WIDTH: usize = 128;
 const HEIGHT: usize = 64;
@@ -332,9 +337,266 @@ fn init_stm32() -> embassy_stm32::Peripherals {
     embassy_stm32::init(config)
 }
 
+async fn drain_st67_ready_messages(module: &mut st67_spi::St67Spi<'_>) -> bool {
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(250);
+    const TOTAL_TIMEOUT: Duration = Duration::from_secs(2);
+    const MAX_MESSAGES: usize = 16;
+
+    let total_deadline = Instant::now() + TOTAL_TIMEOUT;
+    let mut idle_deadline = Instant::now() + IDLE_TIMEOUT;
+    let mut response = [0; 64];
+    let mut messages = 0;
+
+    while Instant::now() < total_deadline && Instant::now() < idle_deadline && messages < MAX_MESSAGES {
+        if !module.is_ready() {
+            AsyncTimer::after_millis(2).await;
+            continue;
+        }
+
+        match module.exchange(st67_spi::AT_TRAFFIC_TYPE, &[], &mut response).await {
+            Ok(_exchange) => {
+                #[cfg(feature = "defmt")]
+                defmt::info!(
+                    "ST67 queued message type {} len {}: {}",
+                    _exchange.response_type,
+                    _exchange.response_len,
+                    core::str::from_utf8(&response[.._exchange.response_len]).unwrap_or("?")
+                );
+                if response[.._exchange.response_len]
+                    .windows(b"+CW:GOTIP".len())
+                    .any(|window| window == b"+CW:GOTIP")
+                {
+                    return true;
+                }
+                messages += 1;
+                idle_deadline = Instant::now() + IDLE_TIMEOUT;
+            }
+            Err(st67_spi::Error::NotReady) => {
+                AsyncTimer::after_millis(2).await;
+            }
+            Err(error) => {
+                #[cfg(feature = "defmt")]
+                defmt::error!("ST67 queued-message poll failed: {:?}", error);
+                #[cfg(not(feature = "defmt"))]
+                panic!("ST67 queued-message poll failed: {:?}", error);
+                #[cfg(feature = "defmt")]
+                break;
+            }
+        }
+    }
+
+    if module.is_ready() {
+        #[cfg(feature = "defmt")]
+        defmt::warn!("ST67 READY remained asserted after polling limit");
+    }
+    false
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+enum SsidQueryError {
+    Transport,
+    UnexpectedTrafficType,
+    CommandNotAccepted,
+    NotConnected,
+    Timeout,
+    WifiIpTimeout,
+    ResponseTooLarge,
+    InvalidResponse,
+}
+
+async fn wait_for_wifi_ip(module: &mut st67_spi::St67Spi<'_>) -> Result<(), SsidQueryError> {
+    const WIFI_GOT_IP: &[u8] = b"+CW:GOTIP";
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut event = [0; 64];
+    let mut event_len = 0;
+    let mut response = [0; 64];
+
+    #[cfg(feature = "defmt")]
+    defmt::info!("Waiting for ST67 Wi-Fi connection and IP address");
+
+    while Instant::now() < deadline {
+        if !module.is_ready() {
+            AsyncTimer::after_millis(2).await;
+            continue;
+        }
+
+        match module.exchange(st67_spi::AT_TRAFFIC_TYPE, &[], &mut response).await {
+            Ok(exchange) if exchange.response_type == st67_spi::AT_TRAFFIC_TYPE => {
+                #[cfg(feature = "defmt")]
+                defmt::info!(
+                    "ST67 Wi-Fi event ({} bytes): {}",
+                    exchange.response_len,
+                    core::str::from_utf8(&response[..exchange.response_len]).unwrap_or("?")
+                );
+
+                if exchange.response_len >= event.len() {
+                    event_len = 0;
+                } else if event_len + exchange.response_len > event.len() {
+                    let keep = event.len() - exchange.response_len;
+                    event.copy_within(event_len - keep..event_len, 0);
+                    event_len = keep;
+                }
+                event[event_len..event_len + exchange.response_len].copy_from_slice(&response[..exchange.response_len]);
+                event_len += exchange.response_len;
+
+                if event[..event_len].windows(WIFI_GOT_IP.len()).any(|window| window == WIFI_GOT_IP) {
+                    return Ok(());
+                }
+            }
+            Ok(_) => return Err(SsidQueryError::UnexpectedTrafficType),
+            Err(st67_spi::Error::NotReady) => {}
+            Err(_) => return Err(SsidQueryError::Transport),
+        }
+    }
+
+    Err(SsidQueryError::WifiIpTimeout)
+}
+
+async fn query_connected_ssid(module: &mut st67_spi::St67Spi<'_>, ssid: &mut [u8; 32]) -> Result<usize, SsidQueryError> {
+    const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+    const PREFIX: &[u8] = b"+CWJAP:";
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut collected = [0; 256];
+    let mut collected_len = 0;
+    let mut chunk = [0; 256];
+
+    let exchange = module
+        .exchange(st67_spi::AT_TRAFFIC_TYPE, b"AT+CWJAP?\r\n", &mut chunk)
+        .await
+        .map_err(|_| SsidQueryError::Transport)?;
+    if exchange.response_type != st67_spi::AT_TRAFFIC_TYPE {
+        return Err(SsidQueryError::UnexpectedTrafficType);
+    }
+    if !exchange.tx_accepted {
+        return Err(SsidQueryError::CommandNotAccepted);
+    }
+    let mut chunk_len = exchange.response_len;
+    if chunk_len > chunk.len() {
+        return Err(SsidQueryError::ResponseTooLarge);
+    }
+    #[cfg(feature = "defmt")]
+    defmt::info!(
+        "ST67 CWJAP initial response ({} bytes): {}",
+        chunk_len,
+        core::str::from_utf8(&chunk[..chunk_len]).unwrap_or("?")
+    );
+
+    loop {
+        if collected_len + chunk_len > collected.len() {
+            return Err(SsidQueryError::ResponseTooLarge);
+        }
+        collected[collected_len..collected_len + chunk_len].copy_from_slice(&chunk[..chunk_len]);
+        collected_len += chunk_len;
+
+        let response = &collected[..collected_len];
+        if response.windows(7).any(|window| window == b"ERROR\r\n") {
+            return Err(SsidQueryError::NotConnected);
+        }
+        let has_ssid = response.windows(PREFIX.len()).any(|window| window == PREFIX);
+        let has_ok = response.windows(4).any(|window| window == b"OK\r\n");
+        if has_ssid && has_ok {
+            let prefix_offset = response
+                .windows(PREFIX.len())
+                .position(|window| window == PREFIX)
+                .ok_or(SsidQueryError::InvalidResponse)?;
+            let mut start = prefix_offset + PREFIX.len();
+            while response.get(start).is_some_and(|byte| *byte == b' ' || *byte == b'\t') {
+                start += 1;
+            }
+            if response.get(start) != Some(&b'"') {
+                return Err(SsidQueryError::InvalidResponse);
+            }
+            start += 1;
+            let end = response[start..]
+                .iter()
+                .position(|byte| *byte == b'"')
+                .map(|offset| start + offset)
+                .ok_or(SsidQueryError::InvalidResponse)?;
+            let ssid_len = end - start;
+            if ssid_len == 0 || ssid_len > ssid.len() {
+                return Err(SsidQueryError::InvalidResponse);
+            }
+            ssid[..ssid_len].copy_from_slice(&response[start..end]);
+            return Ok(ssid_len);
+        }
+
+        if Instant::now() >= deadline {
+            #[cfg(feature = "defmt")]
+            defmt::error!(
+                "ST67 CWJAP timed out; collected {} bytes: {}",
+                collected_len,
+                core::str::from_utf8(response).unwrap_or("?")
+            );
+            return Err(SsidQueryError::Timeout);
+        }
+        if module.is_ready() {
+            match module.exchange(st67_spi::AT_TRAFFIC_TYPE, &[], &mut chunk).await {
+                Ok(exchange) if exchange.response_type == st67_spi::AT_TRAFFIC_TYPE => {
+                    chunk_len = exchange.response_len;
+                    #[cfg(feature = "defmt")]
+                    defmt::info!(
+                        "ST67 CWJAP response chunk ({} bytes): {}",
+                        chunk_len,
+                        core::str::from_utf8(&chunk[..chunk_len]).unwrap_or("?")
+                    );
+                }
+                Ok(_) => return Err(SsidQueryError::UnexpectedTrafficType),
+                Err(st67_spi::Error::NotReady) => chunk_len = 0,
+                Err(_) => return Err(SsidQueryError::Transport),
+            }
+        } else {
+            chunk_len = 0;
+            AsyncTimer::after_millis(2).await;
+        }
+    }
+}
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let peripherals = init_stm32();
+
+    let mut st67_spi = st67_spi::St67Spi::new(
+        peripherals.SPI1,
+        peripherals.PA5,
+        peripherals.PA7,
+        peripherals.PA6,
+        peripherals.PD14,
+        peripherals.PE13,
+        peripherals.PE11,
+    );
+    st67_spi.power_on().await;
+    let mut has_wifi_ip = drain_st67_ready_messages(&mut st67_spi).await;
+    if !has_wifi_ip {
+        match wait_for_wifi_ip(&mut st67_spi).await {
+            Ok(()) => has_wifi_ip = true,
+            Err(error) => {
+                #[cfg(feature = "defmt")]
+                defmt::error!("Timed out waiting for ST67 Wi-Fi IP: {:?}", error);
+                #[cfg(not(feature = "defmt"))]
+                panic!("Timed out waiting for ST67 Wi-Fi IP: {:?}", error);
+            }
+        }
+    }
+
+    if has_wifi_ip {
+        let mut connected_ssid = [0; 32];
+        match query_connected_ssid(&mut st67_spi, &mut connected_ssid).await {
+            Ok(_ssid_len) => {
+                #[cfg(feature = "defmt")]
+                defmt::info!(
+                    "Connected to Wi-Fi SSID: {}",
+                    core::str::from_utf8(&connected_ssid[.._ssid_len]).unwrap_or("?")
+                );
+            }
+            Err(error) => {
+                #[cfg(feature = "defmt")]
+                defmt::error!("Failed to query connected Wi-Fi SSID: {:?}", error);
+                #[cfg(not(feature = "defmt"))]
+                panic!("Failed to query connected Wi-Fi SSID: {:?}", error);
+            }
+        }
+    }
 
     let mut hub75_top = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH0, Irqs), 0, GpioPort::G);
     let mut hub75_bottom = Hub75::new(embassy_stm32::dma::Channel::new(peripherals.GPDMA1_CH1, Irqs), 1, GpioPort::F);
@@ -342,7 +604,20 @@ async fn main(_spawner: Spawner) {
     let mut panel_top = Panel::new();
     let mut panel_bottom = Panel::new();
 
-    test_image::load(&mut panel_top, &mut panel_bottom);
+    match remote_image::load(&mut st67_spi, &mut panel_top, &mut panel_bottom).await {
+        Ok(_png_len) => {
+            #[cfg(feature = "defmt")]
+            defmt::info!("Downloaded and decoded {}-byte remote PNG", _png_len);
+        }
+        Err(error) => {
+            #[cfg(feature = "defmt")]
+            defmt::error!("Remote image load failed: {:?}; using built-in test image", error);
+            #[cfg(not(feature = "defmt"))]
+            panic!("Remote image load failed: {:?}", error);
+            #[cfg(feature = "defmt")]
+            test_image::load(&mut panel_top, &mut panel_bottom);
+        }
+    }
 
     let memory_top = unsafe { &mut *core::ptr::addr_of_mut!(SCAN_MEMORY_TOP) };
     hub75_top.refresh_memory(&panel_top, memory_top);

@@ -6,6 +6,21 @@ The firmware drives two HUB75E panels. GPIOE drives the top panel and GPIOD driv
 
 Each panel's signals pass through two 74HCT245 buffers for 3.3 V to 5 V logic adjustment before reaching its HUB75E connector.
 
+## NUCLEO-U575ZI-Q --> X-NUCLEO-67W61M1
+
+The ST67W611M1 module uses SPI1 with a separate active-high chip select and two control signals.
+
+| **Signal** | **STM32 pin** | **NUCLEO-U575ZI-Q** | **X-NUCLEO-67W61M1** |
+| ---------- | ------------- | ------------------- | -------------------- |
+| 5V         | -             | 5V                  | CN6-5 (5V)           |
+| GND        | -             | GND                 | CN6-6 (GND)          |
+| SCK        | PA5           | CN12-11             | CN5-6 (D13/SCK)      |
+| MISO       | PA6           | CN12-13             | CN5-5 (D12/MISO)     |
+| MOSI       | PA7           | CN12-15             | CN5-4 (D11/MOSI)     |
+| CS         | PD14          | CN12-46             | CN5-3 (D10/CS)       |
+| CHIP_EN    | TBD           | TBD                 | CN9-6 (D5)           |
+| SPI_RDY    | TBD           | TBD                 | CN9-4 (D3)           |
+
 ### Top panel
 
 | **Signal** | **STM32 pin** | **Nucleo header** | **74HCT245** | **Buffer input pin (A)** | **Buffer output pin (B)** | **HUB75E pin** |
