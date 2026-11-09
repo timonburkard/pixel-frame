@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.2.0] -- 2026-11-09
+
+### Added
+
+- [ci]    added github action for cargo build, clippy, fmt
+- [wifi]  integrated ST67W61
+- [panel] can fetch and display image from https://placehold.co/128x128/330000/0000FF.png
+
 ## [v0.1.0] -- 2026-11-08
 
 ### Added
