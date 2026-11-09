@@ -2,5 +2,5 @@
 
 [toolchain]
 channel = "1.90"
-components = ["rust-src", "rustfmt"]
+components = ["clippy", "rust-src", "rustfmt"]
 targets = ["thumbv8m.main-none-eabihf"]

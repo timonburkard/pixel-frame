@@ -144,6 +144,12 @@ impl Panel {
     }
 }
 
+impl Default for Panel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Hub75 {
     _dma_channel: embassy_stm32::dma::Channel<'static>,
     dma_channel_index: usize,
